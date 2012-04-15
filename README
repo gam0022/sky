@@ -1,0 +1,7 @@
+雲のようなものをHSPで再現しました。
+時間とともに変化する雲の様子をご覧ください。
+
+雲のテスクチャには、Perlin Noiseという生成法を利用しています。
+http://freespace.virgin.net/hugo.elias/models/m_perlin.htm
+
+描画の高速化のために、VRAMを直接操作しています。

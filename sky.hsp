@@ -1,0 +1,432 @@
+;===========================================================
+;												2010/10/30
+	title "雲"
+;	version. 1.1.0
+;	http://gmr.blog.shinobi.jp/Category/39/
+;												GAM-22
+;===========================================================
+
+
+/*
+
+	[技術的情報]
+	このプログラムに使われている雲のテスクチャは、Perlin Noiseという
+	生成法を利用してつくっています。
+	http://freespace.virgin.net/hugo.elias/models/m_perlin.htm
+
+	[1.0]
+	start.ax : 3634/6000 byte
+	容量的にはまだ余っているのですが、
+	費やす方向がまだ定まってないです。
+
+	[1.0.1]
+	start.ax : 3496/6000 byte
+	ノイズの内挿補完を簡略化して起動を早くしました(それでも遅い)。
+
+	[1.0.2]
+	start.ax : 3591/6000 byte
+	Shairoさんのコメントによりジャギーを解消。感謝です。
+	http://gmr.blog.shinobi.jp/Entry/794/#comment2
+	スペースキーからのscreenshot機能追加。
+
+	[1.0.3]
+	start.ax : 3822/6000 byte
+	夕焼けを再現できるようにしました。
+	gmode:6, sunset:255 あたりに調整してください。
+
+	[1.1.0]
+	start.ax : 4152/6000 byte
+	太陽を追加。エフェクトが適当なのが残念。
+	夕焼けと言いつつ、太陽の動きからして朝日な気がします。
+*/
+
+;-----------------------------------------------------------
+;	constants
+;-----------------------------------------------------------
+
+	; number
+	one = 1.0
+
+	; size of a perlin noise
+	#const bx	256
+	#const by	bx
+	#const bxy	bx*by
+	
+	#const b2x	bx*2
+	#const b2y	by*2
+	#const b2xy	bxy*2
+	#const b3x	bx*3
+	#const b3y	by*3
+	#const b4x	bx*4
+	#const b4y	by*4
+
+	; max of octaves a noise
+	#const octave_max	6
+	#const octave_2max	octave_max*2
+	
+	; length of a VRAM
+	#const VRAM_length	bxy*3
+	#const VRAM_2length	VRAM_length*2
+	
+	; window buffers
+	#enum main_buf = 0
+	#enum perlin_buf
+	#enum compose_buf
+	#enum buffer_buf
+	#enum sun_buf
+
+
+	; settings
+	#const slider_max 7
+		; 閾値・ブレンド率・コピーモード・明るさ
+		#enum threshold = 0
+		#enum blend
+		#enum mode
+		#enum bright
+		#enum sunlight
+		; 夕焼け
+		#enum sunset
+		#enum boder
+		slider_title = "threshold:",	"blend:",	"*gmode:",	"bright:",	"sunlight:",	"*sunset:", "boder:"
+		slider_value = 110,				255,		gmode_add,	255,		255,			1,			0
+		dim slider_on, slider_max
+
+	; font
+	font_thema = "Palatino Linotype"
+
+	; key codes
+	#const space	16
+	#const esc		128
+	#const Lclick	256
+	#const Rclick	512
+
+	; debug mode
+	#const debug 0
+
+	; winmm.dll
+	;#uselib "winmm.dll"
+	;#cfunc timeGetTime "timeGetTime"
+
+
+if 0 {
+;-----------------------------------------------------------
+;	functions
+;-----------------------------------------------------------
+
+
+#defcfunc noise int px, int py
+// ノイズ参照
+	mx = px\t
+	my = py\t
+	if px<0 : mx = t-1
+	if py<0 : my = t-1
+	return noise_data(my,mx)
+
+/*
+#defcfunc interpolate double p1, double p2, double p3
+// 内挿
+	;m1 = 0.5 * (one - cos(p3 * M_PI))
+	return  p1*(one-m1) + p2*m2
+*/
+}
+
+
+*top
+
+
+;-----------------------------------------------------------
+;	top
+;-----------------------------------------------------------
+#if debug=0
+
+	; stattime = timeGetTime()
+
+	// start up screen
+	font font_thema, 20
+	pos 0,0 : mes "Please wait..."
+	palcolor 7
+	repeat 12
+		gosub *status_bar
+	loop
+	palcolor 12
+
+
+	randomize
+	dim octave, b2xy
+	dim octave_id
+
+	;-------------------------------------------------------
+	;	6オクターブから成るパーリンノイズを2枚生成
+	;-------------------------------------------------------
+
+	repeat octave_2max
+		; ブロックの幅
+		s = 1 << (octave_id\octave_max)
+		; ブロックの数の平方
+		t = bx/s
+
+		// ノイズ生成
+		dim noise_data, t, t
+		repeat t*t
+			noise_data(cnt\t, cnt/t) = rnd(256)
+		loop
+		//
+
+		// ノイズをスムーズに
+		dim noise_, bx,by
+		repeat t*t
+			x = cnt\t
+			y = cnt/t
+			noise_(x,y) =  ( ( noise(x-1,y-1) + noise(x+1,y-1) + noise(x+1,y+1) + noise(x-1,y+1) )>>4 ) + ( ( noise(x-1,y) + noise(x+1,y)+noise(x,y-1) + noise(x,y+1) )>>3 ) + ( noise_data(x,y)>>2 )
+		loop
+		//
+
+		// ノイズを引き伸ばす
+		repeat t*t
+			x = cnt\t
+			y = cnt/t
+			v1 = noise_(x, y)
+			v2 = noise_((x+1)\t, y)
+			v3 = noise_(x, (y+1)\t)
+			v4 = noise_((x+1)\t, (y+1)\t)
+			repeat s*s
+				f = one/s*(cnt\s)
+				g = one/s*(cnt/s)
+				v5 = (one-f)*v1 + f*v2
+				v6 = (one-f)*v3 + f*v4
+				octave( octave_id/octave_max*bxy + ( y*s+(cnt/s) )*bx + x*s+(cnt\s) ) += 0 +  ( (one-g)*v5 + g*v6 ) *s/64
+			loop
+		loop
+		//
+
+		octave_id ++
+		gosub*status_bar
+		wait 0
+	loop
+
+	;dialog (timeGetTime()-stattime)
+	;----
+
+#endif
+
+	;screen 0, 640, 720
+
+	// perlin buffer
+	buffer perlin_buf, bx,b2y
+
+	#if debug
+		picload "い.bmp"
+	#endif
+
+	#if debug=0
+		mref VRAM, 66
+		repeat VRAM_2length
+			// ノイズをバッファに描画
+			poke VRAM, cnt, octave(cnt/3)
+		loop
+	#endif
+
+	// compose buffer
+	buffer compose_buf, bx,by
+	mref VRAM, 66
+
+	// buffer buffer
+	buffer buffer_buf, b3x, b3y
+
+	// sun buffer
+	buffer sun_buf
+	boxf
+	repeat 128
+		c = cnt*cnt/64
+		color c,0.8*c,0.2*c
+		circle cnt,cnt, 256-cnt,256-cnt
+	loop
+
+	mcnt = 120
+
+
+*main
+
+;-----------------------------------------------------------
+;	compose
+;-----------------------------------------------------------
+
+	gsel compose_buf
+	;redraw 0
+
+	color : boxf
+	gmode gmode_add, bx,by, 127
+
+	d = mcnt\256
+	pos 0,0 : gcopy perlin_buf, bx-d, by, d,   by
+	pos d,0 : gcopy perlin_buf, 0,    by, bx-d, by
+
+	pos 0,0		: gcopy perlin_buf, 0, d, bx, by-d
+	pos 0,by-d	: gcopy perlin_buf, 0, 0, bx, d
+
+	repeat bxy
+	// パーリンノイズを雲に加工(200ms)
+		c = limit( (peek(VRAM, cnt*3)-slider_value) << 3 , 0, 235)
+		wpoke VRAM, cnt*3, c<<8 | c
+		poke VRAM, cnt*3+2, c
+	loop
+
+	;redraw
+
+;-----------------------------------------------------------
+;	buffer
+;-----------------------------------------------------------
+
+	gsel buffer_buf
+	;redraw 0
+
+	// sky
+	dup v1, slider_value.sunset
+	d = 4 * slider_value.boder
+	#const bule 25<<16 | 25<<8 | 240
+	red = (v1)<<16 | 90<<8 | (256-v1)
+	gradf ,-d,,520+d, 1, bule, red
+
+	// cloud
+	repeat 6
+	; 3*2枚並べる
+		gmode limit(slider_value.mode, 0,6), bx,by, slider_value.blend
+		pos bx*(cnt\3), by*(cnt/3)
+		gcopy compose_buf
+	loop
+
+	;redraw
+
+;-----------------------------------------------------------
+;	main
+;-----------------------------------------------------------
+
+	gsel main_buf;, 1
+
+	// キー入力
+	key_log = key
+	stick key, Lclick
+
+		; クリックで、setting mode に切り替え
+		setting ^= key&Rclick
+	
+		; [space] screenshot
+		if key&space {
+			dialog "bmp", 17
+			if stat=1 {
+				bmpsave getpath(refstr,1)+".bmp"
+			}
+		}
+		; [esc] reset
+		if key&esc {
+			palcolor 10
+			goto*top
+		}
+
+	redraw 0
+
+		color : boxf
+
+	// sun
+		gmode 5, 256,256, slider_value.sunlight
+		d = mcnt\736
+		if mcnt\736:else : sunx = rnd(384)
+		pos sunx,480-d : gcopy sun_buf
+		pos sunx+20,500-d : gcopy sun_buf
+
+	// cloud
+
+		; コピー元
+		#const sqxd 64*5
+		#const sqx0 sqxd
+		#const sqx1 b3x-sqxd
+		#const sqx2 b3x
+		#const sqx3 0
+		x1 = sqx0, sqx1, sqx2, sqx3
+		y1 = 0, 0, b3y, b3y
+	
+		; コピー先
+		; 長方形にしないと、ジャギが発生するようです
+		x0 = 0, 640,640, 0
+		y0 = 0, 0, 720, 720; 画面下部は切り捨て
+	
+		gmode 5,,, slider_value.bright
+		gsquare buffer_buf, x0,y0, x1,y1
+
+	if setting {
+	// settings
+
+		// base
+		gmode gmode_alpha, 1,1, 128
+		color 22,22,22
+		grect 320,240, 0, 500,420
+
+		// -Settings-
+		palcolor 10
+		font font_thema, 30
+		pos 80,40 : mes "-Settings-"
+
+		font font_thema, 15
+
+		// slider
+		#const slider_left		200
+		#const slider_right		slider_left+255+1
+		#const slider_top		120
+		#const slider_bottom	slider_top+3
+		#const slider_title_top slider_top-10
+		#const slider_value_top slider_top-25
+	
+		#const slider_knob_top		slider_top-5
+		#const slider_knob_bottom	slider_bottom+5
+		#const slider_knob_left		slider_left
+		#const slider_knob_right	slider_knob_left+1
+		#const slider_knob_value_left	slider_knob_left-3
+
+		repeat slider_max
+			d = 50*cnt
+
+			if ((key_log&Lclick)=0) * (key&Lclick) * (mousex>=slider_left) * (mousex<=slider_right) * (mousey>=slider_knob_top+d) * (mousey<=slider_knob_bottom+d) {
+				; catch
+				slider_on.cnt = 1
+			}
+
+			; hold
+			slider_on.cnt &= (key&Lclick) = Lclick
+
+			if slider_on.cnt {
+				// 掴んだときは、チカチカさせる
+				slider_value.cnt = limit(mousex-slider_knob_left, 0, 255)
+				c = 55*(mcnt\2)+200
+			} else {
+				c = 230
+			}
+
+			color c,c,c
+
+			; 配列変数の参照はコストが高いので
+			dup v1, slider_value.cnt
+
+			; title
+			pos 100,slider_title_top+d : mes slider_title.cnt
+			; bar
+			boxf slider_left, slider_top+d, slider_right, slider_bottom+d
+			; knob
+			boxf slider_knob_left+v1, slider_knob_top+d, slider_knob_right+v1, slider_knob_bottom+d
+			; value
+			pos slider_knob_value_left+v1, slider_value_top+d : mes v1
+		loop
+	}
+
+
+	redraw
+	await 20
+
+	mcnt ++
+	goto *main
+
+
+
+*status_bar
+// ステータスバーを描画
+	boxf 16*cnt+2, 32, 16*cnt+15, 64
+	return
